@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>數位名片</title>
+<link rel="stylesheet" href="/common.css">
+</head>
+<body>
+<div class="pb-app" id="pbApp">
+  <div class="pb-header">
+    <div class="pb-header-top">
+      <div class="pb-brand">
+        <div class="pb-brand-mark" id="pbBrandMark">物</div>
+        <div class="pb-brand-text">
+          <h1 class="pb-brand-name" id="pbBrandName">我的物件簿</h1>
+        </div>
+      </div>
+      <div class="pb-header-actions">
+        <a class="pb-mode-btn" href="/" style="text-decoration:none;">物件列表</a>
+      </div>
+    </div>
+  </div>
+  <div class="pb-body">
+    <div class="pb-main" id="pbMain"><div class="pb-loading">載入中…</div></div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+(function () {
+  var PB = window.PB;
+
+  async function init() {
+    var main = document.getElementById('pbMain');
+    var shop;
+    try {
+      shop = await PB.apiGet('/api/shop');
+    } catch (err) {
+      main.innerHTML = '<div class="pb-err">讀取資料時發生問題，請重新整理再試一次。</div>';
+      return;
+    }
+
+    document.title = (shop.name || '我的物件簿') + ' - 數位名片';
+    document.getElementById('pbBrandName').textContent = shop.name || '我的物件簿';
+    var mark = document.getElementById('pbBrandMark');
+    mark.innerHTML = shop.avatar ? '<img src="' + shop.avatar + '" alt="">' : PB.escapeHtml((shop.name || '物').trim().charAt(0) || '物');
+
+    var contacts = (shop.contacts || []).filter(function (c) { return c.value && c.value.trim(); });
+    var avatarHtml = shop.avatar
+      ? '<img class="pb-card-avatar" src="' + shop.avatar + '" alt="' + PB.escapeHtml(shop.name || '') + '">'
+      : '<div class="pb-card-avatar pb-card-avatar-fallback">' + PB.escapeHtml((shop.name || '物').trim().charAt(0) || '物') + '</div>';
+
+    var ctaHtml = contacts.length ? '<div class="pb-card-cta">' + contacts.map(function (c) {
+      var cls = c.type === 'phone' ? 'pb-cta-btn pb-cta-phone' : (c.type === 'line' ? 'pb-cta-btn pb-cta-line' : 'pb-cta-btn pb-cta-social');
+      var icon = c.type === 'phone' ? 'phone' : (c.type === 'line' ? 'line' : 'social');
+      var label = c.label && c.label.trim() ? c.label.trim() : (c.type === 'phone' ? '撥打電話' : (c.type === 'line' ? '加 LINE 好友' : '前往連結'));
+      var href = c.type === 'phone' ? PB.telHref(c.value) : (c.type === 'line' ? PB.lineHref(c.value) : PB.socialHref(c.value));
+      return '<a class="' + cls + '" href="' + PB.escapeHtml(href) + '" target="_blank" rel="noopener">' + PB.ICONS[icon] + '<span>' + PB.escapeHtml(label) + '</span></a>';
+    }).join('') + '</div>' : '<p class="pb-hint" style="text-align:center;">尚未設定聯繫方式。</p>';
+
+    main.innerHTML =
+      '<div class="pb-card-page"><div class="pb-card">' +
+        avatarHtml +
+        '<h2 class="pb-card-name">' + PB.escapeHtml(shop.name || '我的物件簿') + '</h2>' +
+        (shop.role ? '<div class="pb-card-role">' + PB.escapeHtml(shop.role) + '</div>' : '') +
+        (shop.tagline ? '<div class="pb-card-tagline">' + PB.escapeHtml(shop.tagline) + '</div>' : '') +
+        ctaHtml +
+      '</div></div>';
+  }
+  init();
+})();
+</script>
+</body>
+</html>

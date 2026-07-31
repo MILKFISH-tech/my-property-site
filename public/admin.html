@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>後台管理｜物件簿</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="stylesheet" href="/common.css">
+</head>
+<body>
+<div class="pb-app" id="pbApp">
+  <div class="pb-header">
+    <div class="pb-header-top">
+      <div class="pb-brand">
+        <div class="pb-brand-mark" id="pbBrandMark">物</div>
+        <div class="pb-brand-text">
+          <h1 class="pb-brand-name" id="pbBrandName">我的物件簿</h1>
+        </div>
+        <span class="pb-mode-tag">後台管理</span>
+      </div>
+      <div class="pb-header-actions" id="pbHeaderActions"></div>
+    </div>
+  </div>
+  <div class="pb-body" id="pbBody" style="display:none;">
+    <div class="pb-list-panel">
+      <div class="pb-list-head" id="pbListHead"></div>
+      <div class="pb-list-search-wrap"><input type="text" id="pbListSearch" class="pb-list-search" placeholder="搜尋標題、地址或物件編號"></div>
+      <div class="pb-list" id="pbList"></div>
+    </div>
+    <div class="pb-main" id="pbMain"></div>
+  </div>
+  <div id="pbLoginWrap"></div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+(function () {
+  var PB = window.PB;
+  var MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+
+  var state = {
+    authenticated: false,
+    loading: true,
+    error: null,
+    shop: { name: '我的物件簿', tagline: '', role: '', avatar: '', contacts: [] },
+    listings: [],
+    selectedId: null,
+    mode: 'view',
+    draft: null,
+    shopDraft: null,
+    searchQuery: '',
+    activeMedia: null
+  };
+
+  function uid() { return 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+  // ---------- Login gate ----------
+  function renderLogin(errMsg) {
+    document.getElementById('pbBody').style.display = 'none';
+    document.getElementById('pbHeaderActions').innerHTML = '';
+    document.getElementById('pbLoginWrap').innerHTML =
+      '<div class="pb-login-wrap"><div class="pb-login-card">' +
+        '<h2>後台登入</h2>' +
+        '<label class="pb-mono" style="display:block;font-size:11px;color:var(--ink-faint);margin-bottom:6px;">管理密碼</label>' +
+        '<input type="password" id="loginPw" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:14px;">' +
+        '<div class="pb-login-err" id="loginErr">' + (errMsg ? PB.escapeHtml(errMsg) : '') + '</div>' +
+        '<button class="pb-btn-primary" id="loginBtn" type="button" style="width:100%;margin-top:10px;">登入</button>' +
+      '</div></div>';
+
+    var pwInput = document.getElementById('loginPw');
+    var doLogin = async function () {
+      var btn = document.getElementById('loginBtn');
+      btn.textContent = '登入中…'; btn.disabled = true;
+      try {
+        await PB.apiPost('/api/login', { password: pwInput.value });
+        state.authenticated = true;
+        document.getElementById('pbLoginWrap').innerHTML = '';
+        await boot();
+      } catch (err) {
+        renderLogin(err.message || '登入失敗');
+      }
+    };
+    document.getElementById('loginBtn').addEventListener('click', doLogin);
+    pwInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+    pwInput.focus();
+  }
+
+  // ---------- storage helpers ----------
+  async function loadShop() { state.shop = await PB.apiGet('/api/shop'); }
+  async function loadListings() { state.listings = await PB.apiGet('/api/listings?all=1'); }
+
+  async function saveListing(listing) {
+    if (state.listings.some(function (l) { return l.id === listing.id; })) {
+      return PB.apiPut('/api/listings/' + listing.id, listing);
+    }
+    return PB.apiPost('/api/listings', listing);
+  }
+  async function deleteListingApi(id) { return PB.apiDelete('/api/listings/' + id); }
+  async function saveShopApi(shop) { return PB.apiPut('/api/shop', shop); }
+
+  // ---------- header ----------
+  function renderHeader() {
+    document.getElementById('pbBrandName').textContent = state.shop.name || '我的物件簿';
+    var mark = document.getElementById('pbBrandMark');
+    mark.innerHTML = state.shop.avatar ? '<img src="' + state.shop.avatar + '" alt="">' : PB.escapeHtml((state.shop.name || '物').trim().charAt(0) || '物');
+    document.title = '後台管理｜' + (state.shop.name || '我的物件簿');
+
+    var actions = document.getElementById('pbHeaderActions');
+    actions.innerHTML =
+      '<button class="pb-add-btn" id="pbAddBtn" type="button">＋ 新增物件</button>' +
+      '<button class="pb-mode-btn" id="pbShopBtn" type="button">店鋪設定</button>' +
+      '<button class="pb-mode-btn" id="pbExportBtn" type="button">匯出備份</button>' +
+      '<a class="pb-mode-btn" href="/" target="_blank" style="text-decoration:none;">前台預覽</a>' +
+      '<button class="pb-mode-btn" id="pbLogoutBtn" type="button">登出</button>';
+
+    document.getElementById('pbAddBtn').addEventListener('click', function () {
+      state.draft = blankDraft();
+      state.mode = 'create';
+      render();
+    });
+    document.getElementById('pbShopBtn').addEventListener('click', function () {
+      state.shopDraft = JSON.parse(JSON.stringify(state.shop));
+      state.mode = 'shopSettings';
+      render();
+    });
+    document.getElementById('pbExportBtn').addEventListener('click', exportBackup);
+    document.getElementById('pbLogoutBtn').addEventListener('click', async function () {
+      try { await PB.apiPost('/api/logout', {}); } catch (e) {}
+      location.reload();
+    });
+  }
+
+  function exportBackup() {
+    var payload = { exportedAt: new Date().toISOString(), shop: state.shop, listings: state.listings };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = (state.shop.name || '物件簿') + '-備份-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+
+  // ---------- list ----------
+  function filteredListings() {
+    var q = (state.searchQuery || '').trim().toLowerCase();
+    if (!q) return state.listings;
+    return state.listings.filter(function (l) {
+      return (l.title || '').toLowerCase().indexOf(q) !== -1 ||
+        (l.address || '').toLowerCase().indexOf(q) !== -1 ||
+        (l.code || '').toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  function renderList() {
+    var rows = filteredListings();
+    document.getElementById('pbListHead').textContent = '所有物件（' + rows.length + (state.searchQuery ? ' / 共 ' + state.listings.length : '') + '）';
+    var list = document.getElementById('pbList');
+    if (!state.listings.length) {
+      list.innerHTML = '<div class="pb-list-empty">還沒有任何物件。<br>點右上角「新增物件」開始刊登。</div>';
+      return;
+    }
+    if (!rows.length) {
+      list.innerHTML = '<div class="pb-list-empty">找不到符合「' + PB.escapeHtml(state.searchQuery) + '」的物件。</div>';
+      return;
+    }
+    list.innerHTML = rows.map(function (l) {
+      var thumb = l.images && l.images.length ? '<img class="pb-row-thumb" src="' + l.images[0] + '" alt="">' : '<div class="pb-row-thumb-empty">無照片</div>';
+      var active = (l.id === state.selectedId && state.mode !== 'create' && state.mode !== 'shopSettings') ? ' active' : '';
+      return '<div class="pb-row' + active + '" data-id="' + l.id + '">' + thumb +
+        '<div class="pb-row-info"><p class="pb-row-title">' + PB.escapeHtml(l.title || '未命名物件') + '</p>' +
+        '<div class="pb-row-meta"><span class="pb-row-price">' + PB.fmtPrice(l.price) + '</span><span>·</span><span class="pb-row-addr">' + PB.escapeHtml(l.address || '未填寫地址') + '</span></div></div>' +
+        '<span class="pb-row-status ' + (PB.STATUS_CLASS[l.status] || 'pb-status-sale') + '">' + (PB.STATUS_LABEL[l.status] || '售') + '</span></div>';
+    }).join('');
+    list.querySelectorAll('.pb-row').forEach(function (el) {
+      el.addEventListener('click', function () {
+        state.selectedId = el.getAttribute('data-id');
+        state.mode = 'view';
+        state.activeMedia = null;
+        render();
+      });
+    });
+  }
+
+  function currentListing() { return state.listings.find(function (l) { return l.id === state.selectedId; }) || null; }
+
+  // ---------- render root ----------
+  function render() {
+    renderHeader();
+    renderList();
+    var main = document.getElementById('pbMain');
+    if (state.mode === 'shopSettings') { renderShopForm(main); return; }
+    if (state.mode === 'create' || state.mode === 'edit') { renderForm(main); return; }
+    var l = currentListing();
+    if (!l) {
+      main.innerHTML = '<div class="pb-empty-state"><div class="pb-serif">開始刊登你的第一筆物件</div><div>填寫標題、狀態、價格與地址，隨時可以修改。</div></div>';
+      return;
+    }
+    renderDetail(main, l);
+  }
+
+  // ---------- detail ----------
+  function renderDetail(main, l) {
+    var media = PB.buildMedia(l);
+    var activeIdx = (typeof state.activeMedia === 'number' && state.activeMedia < media.length) ? state.activeMedia : 0;
+    var active = media[activeIdx];
+
+    var gallery;
+    if (media.length) {
+      var mainHtml = '';
+      if (active.type === 'image') {
+        mainHtml = '<img class="pb-gallery-main" src="' + active.src + '" alt="">';
+      } else if (active.type === 'video-file' || active.type === 'video-link') {
+        mainHtml = '<video id="pbGalleryVideo" class="pb-gallery-main" src="' + PB.escapeHtml(active.src) + '" controls></video>';
+      } else if (active.type === 'youtube' || active.type === 'tiktok') {
+        mainHtml = '<div class="pb-gallery-embed"><iframe src="' + PB.escapeHtml(active.src) + '" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>';
+      } else if (active.type === 'tiktok-short') {
+        mainHtml = '<div class="pb-gallery-fallback"><p>這是 TikTok 短連結，沒辦法產生預覽畫面。</p></div>';
+      }
+      gallery = '<div class="pb-gallery">' + mainHtml +
+        (media.length > 1 ? '<div class="pb-gallery-strip">' + media.map(function (m, idx) {
+          var isVideo = m.type !== 'image';
+          var inner;
+          if (m.type === 'image') inner = '<img src="' + m.src + '">';
+          else if (m.type === 'youtube') inner = '<img src="https://img.youtube.com/vi/' + PB.escapeHtml(m.src.split('/embed/')[1] || '') + '/default.jpg">';
+          else if (m.type === 'tiktok' || m.type === 'tiktok-short') inner = '<div class="pb-thumb-label">TikTok</div>';
+          else inner = '<video src="' + PB.escapeHtml(m.src) + '" muted preload="metadata"></video>';
+          return '<div class="pb-thumb-btn ' + (idx === activeIdx ? 'active' : '') + '" data-idx="' + idx + '">' + inner + (isVideo ? '<span class="pb-thumb-play">' + PB.PLAY_ICON + '</span>' : '') + '</div>';
+        }).join('') + '</div>' : '') + '</div>';
+    } else {
+      gallery = '<div class="pb-gallery"><div class="pb-gallery-empty">尚未上傳照片或影片</div></div>';
+    }
+
+    main.innerHTML =
+      '<div class="pb-detail-top"><div>' +
+        '<div class="pb-eyebrow">' + (PB.STATUS_LABEL[l.status] || '售') + ' · 物件編號 ' + PB.escapeHtml(l.code && l.code.trim() ? l.code.trim() : l.id.slice(-6).toUpperCase()) + '</div>' +
+        '<h2 class="pb-detail-title">' + PB.escapeHtml(l.title || '未命名物件') + '</h2>' +
+        '<div class="pb-detail-price">' + PB.fmtPrice(l.price) + '</div>' +
+        '<div class="pb-detail-addr">' + PB.escapeHtml(l.address || '尚未填寫地址') + '</div>' +
+      '</div><div class="pb-actions">' +
+        '<button class="pb-icon-btn" id="pbEditBtn" type="button">編輯</button>' +
+        '<button class="pb-icon-btn danger" id="pbDeleteBtn" type="button">刪除</button>' +
+      '</div></div>' +
+      gallery +
+      (l.description ? '<p class="pb-desc">' + PB.escapeHtml(l.description).replace(/\n/g, '<br>') + '</p>' : '');
+
+    var strip = main.querySelector('.pb-gallery-strip');
+    if (strip) strip.querySelectorAll('.pb-thumb-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { state.activeMedia = Number(btn.getAttribute('data-idx')); renderDetail(main, l); });
+    });
+    document.getElementById('pbEditBtn').addEventListener('click', function () {
+      state.draft = JSON.parse(JSON.stringify(l));
+      state.mode = 'edit';
+      render();
+    });
+    document.getElementById('pbDeleteBtn').addEventListener('click', async function (e) {
+      if (!confirm('確定要刪除「' + (l.title || '此物件') + '」嗎？此動作無法復原。')) return;
+      e.target.textContent = '刪除中…'; e.target.disabled = true;
+      try {
+        await deleteListingApi(l.id);
+        state.listings = state.listings.filter(function (x) { return x.id !== l.id; });
+        state.selectedId = state.listings.length ? state.listings[0].id : null;
+        render();
+      } catch (err) { alert('刪除失敗：' + err.message); render(); }
+    });
+  }
+
+  function blankDraft() {
+    return { id: uid(), code: '', title: '', status: 'sale', price: '', address: '', description: '', images: [], video: null, videoUrl: '' };
+  }
+
+  // ---------- form ----------
+  function renderForm(main) {
+    var d = state.draft;
+    var isCreate = state.mode === 'create';
+    main.innerHTML =
+      '<div class="pb-eyebrow">' + (isCreate ? '新增物件' : '編輯物件') + '</div>' +
+      '<div class="pb-form">' +
+        '<label>物件編號（選填）</label><input type="text" id="fCode" placeholder="A-001">' +
+        '<label>標題</label><input type="text" id="fTitle" placeholder="例如：陽光三房兩廳，近公園">' +
+        '<div class="pb-row2">' +
+          '<div><label>狀態</label><select id="fStatus"><option value="sale">出售</option><option value="rent">出租</option><option value="done">已成交</option></select></div>' +
+          '<div><label>價格（萬元）</label><input type="number" id="fPrice" placeholder="880"></div>' +
+        '</div>' +
+        '<label>地址</label><input type="text" id="fAddress" placeholder="台中市西區…">' +
+        '<label>物件詳細描述</label><textarea id="fDesc" placeholder="屋況、格局優點、周邊機能…"></textarea>' +
+        '<label>照片（可拖曳排序，第一張為封面）</label>' +
+        '<div class="pb-img-upload" id="pbUploadZone">點擊或拖曳圖片到這裡上傳（可多選）</div>' +
+        '<input type="file" id="pbFileInput" accept="image/*" multiple style="display:none">' +
+        '<div class="pb-img-edit-grid" id="pbImgGrid"></div>' +
+        '<label>影片連結（YouTube、TikTok 等，推薦）</label>' +
+        '<input type="text" id="fVideoUrl" placeholder="https://youtu.be/xxxxx">' +
+        '<label>或直接上傳影片檔案</label>' +
+        '<div class="pb-img-upload" id="pbVideoZone">點擊上傳影片</div>' +
+        '<input type="file" id="pbVideoInput" accept="video/*" style="display:none">' +
+        '<div id="pbVideoEditWrap"></div>' +
+        '<div class="pb-form-actions">' +
+          '<button class="pb-btn-primary" id="pbSaveBtn" type="button">儲存</button>' +
+          '<button class="pb-btn-secondary" id="pbCancelBtn" type="button">取消</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('fCode').value = d.code || '';
+    document.getElementById('fTitle').value = d.title || '';
+    document.getElementById('fStatus').value = d.status || 'sale';
+    document.getElementById('fPrice').value = d.price || '';
+    document.getElementById('fAddress').value = d.address || '';
+    document.getElementById('fDesc').value = d.description || '';
+    document.getElementById('fVideoUrl').value = d.videoUrl || '';
+    document.getElementById('fVideoUrl').addEventListener('input', function (e) {
+      if (e.target.value.trim()) { d.video = null; renderVideoEdit(); }
+    });
+
+    renderImgGrid();
+    renderVideoEdit();
+
+    var zone = document.getElementById('pbUploadZone');
+    var fileInput = document.getElementById('pbFileInput');
+    zone.addEventListener('click', function () { fileInput.click(); });
+    fileInput.addEventListener('change', async function (e) {
+      var files = Array.prototype.slice.call(e.target.files || []);
+      if (!files.length) return;
+      zone.textContent = '上傳中…';
+      for (var i = 0; i < files.length; i++) {
+        try {
+          var res = await PB.apiUpload(files[i]);
+          d.images = d.images || [];
+          d.images.push(res.url);
+        } catch (err) { alert('上傳失敗：' + err.message); }
+      }
+      zone.textContent = '點擊或拖曳圖片到這裡上傳（可多選）';
+      fileInput.value = '';
+      renderImgGrid();
+    });
+
+    var vZone = document.getElementById('pbVideoZone');
+    var vInput = document.getElementById('pbVideoInput');
+    vZone.addEventListener('click', function () { vInput.click(); });
+    vInput.addEventListener('change', async function (e) {
+      var file = (e.target.files || [])[0];
+      vInput.value = '';
+      if (!file) return;
+      if (file.size > MAX_VIDEO_BYTES) { alert('影片檔案過大，上限約 200MB。'); return; }
+      vZone.textContent = '上傳中…';
+      try {
+        var res = await PB.apiUpload(file);
+        d.video = res.url;
+        d.videoUrl = '';
+        document.getElementById('fVideoUrl').value = '';
+      } catch (err) { alert('上傳失敗：' + err.message); }
+      vZone.textContent = '點擊上傳影片';
+      renderVideoEdit();
+    });
+
+    document.getElementById('pbSaveBtn').addEventListener('click', onSave);
+    document.getElementById('pbCancelBtn').addEventListener('click', function () { state.mode = 'view'; render(); });
+
+    function renderImgGrid() {
+      var grid = document.getElementById('pbImgGrid');
+      grid.innerHTML = (d.images || []).map(function (src, idx) {
+        return '<div class="pb-img-edit-item" draggable="true" data-idx="' + idx + '"><img src="' + src + '"><span class="pb-order-badge">' + (idx + 1) + '</span><button type="button" data-idx="' + idx + '">×</button></div>';
+      }).join('');
+      grid.querySelectorAll('.pb-img-edit-item button').forEach(function (btn) {
+        btn.addEventListener('click', function (evt) { evt.stopPropagation(); d.images.splice(Number(btn.getAttribute('data-idx')), 1); renderImgGrid(); });
+      });
+      var dragFrom = null;
+      grid.querySelectorAll('.pb-img-edit-item').forEach(function (item) {
+        item.addEventListener('dragstart', function () { dragFrom = Number(item.getAttribute('data-idx')); item.classList.add('dragging'); });
+        item.addEventListener('dragend', function () { item.classList.remove('dragging'); });
+        item.addEventListener('dragover', function (evt) { evt.preventDefault(); item.classList.add('dragover'); });
+        item.addEventListener('dragleave', function () { item.classList.remove('dragover'); });
+        item.addEventListener('drop', function (evt) {
+          evt.preventDefault(); item.classList.remove('dragover');
+          var to = Number(item.getAttribute('data-idx'));
+          if (dragFrom === null || dragFrom === to) return;
+          var moved = d.images.splice(dragFrom, 1)[0];
+          d.images.splice(to, 0, moved);
+          dragFrom = null;
+          renderImgGrid();
+        });
+      });
+    }
+
+    function renderVideoEdit() {
+      var wrap = document.getElementById('pbVideoEditWrap');
+      if (!d.video) { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = '<div class="pb-video-edit"><video src="' + d.video + '" controls></video><button type="button" id="pbRemoveVideo">×</button></div>';
+      document.getElementById('pbRemoveVideo').addEventListener('click', function () { d.video = null; renderVideoEdit(); });
+    }
+
+    async function onSave() {
+      d.code = document.getElementById('fCode').value.trim();
+      d.title = document.getElementById('fTitle').value.trim() || '未命名物件';
+      d.status = document.getElementById('fStatus').value;
+      d.price = document.getElementById('fPrice').value;
+      d.address = document.getElementById('fAddress').value.trim();
+      d.description = document.getElementById('fDesc').value.trim();
+      d.videoUrl = document.getElementById('fVideoUrl').value.trim();
+      if (d.videoUrl) d.video = null;
+
+      var saveBtn = document.getElementById('pbSaveBtn');
+      saveBtn.textContent = '儲存中…'; saveBtn.disabled = true;
+      try {
+        var saved = await saveListing(d);
+        var idx = state.listings.findIndex(function (x) { return x.id === saved.id; });
+        if (idx === -1) state.listings.unshift(saved); else state.listings[idx] = saved;
+        state.selectedId = saved.id;
+        state.activeMedia = null;
+        state.mode = 'view';
+        state.draft = null;
+        render();
+      } catch (err) {
+        saveBtn.textContent = '儲存'; saveBtn.disabled = false;
+        alert('儲存失敗：' + err.message);
+      }
+    }
+  }
+
+  // ---------- shop settings ----------
+  function renderShopForm(main) {
+    var s = state.shopDraft;
+    main.innerHTML =
+      '<div class="pb-eyebrow">店鋪設定</div>' +
+      '<div class="pb-form">' +
+        '<label>大頭照 / Logo</label>' +
+        '<div class="pb-img-upload" id="sAvatarZone">點擊上傳一張照片</div>' +
+        '<input type="file" id="sAvatarInput" accept="image/*" style="display:none">' +
+        '<div id="sAvatarPreviewWrap"></div>' +
+        '<label>店鋪名稱</label><input type="text" id="sName" placeholder="例如：小陳的物件簿">' +
+        '<label>職稱／角色</label><input type="text" id="sRole" placeholder="例如：資深房仲顧問">' +
+        '<label>一句話介紹</label><input type="text" id="sTagline" placeholder="例如：台中西區房屋出租出售">' +
+        '<label>聯繫方式</label><div id="sContactList"></div>' +
+        '<button type="button" class="pb-add-contact-btn" id="sAddContact">＋ 新增聯繫方式</button>' +
+        '<div class="pb-form-actions">' +
+          '<button class="pb-btn-primary" id="sSaveBtn" type="button">儲存</button>' +
+          '<button class="pb-btn-secondary" id="sCancelBtn" type="button">取消</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('sName').value = s.name || '';
+    document.getElementById('sRole').value = s.role || '';
+    document.getElementById('sTagline').value = s.tagline || '';
+
+    function renderAvatarPreview() {
+      var wrap = document.getElementById('sAvatarPreviewWrap');
+      if (!s.avatar) { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = '<div class="pb-avatar-edit"><img src="' + s.avatar + '"><button type="button" id="sRemoveAvatar">×</button></div>';
+      document.getElementById('sRemoveAvatar').addEventListener('click', function () { s.avatar = ''; renderAvatarPreview(); });
+    }
+    renderAvatarPreview();
+
+    var avatarZone = document.getElementById('sAvatarZone');
+    var avatarInput = document.getElementById('sAvatarInput');
+    avatarZone.addEventListener('click', function () { avatarInput.click(); });
+    avatarInput.addEventListener('change', async function (e) {
+      var file = (e.target.files || [])[0];
+      avatarInput.value = '';
+      if (!file) return;
+      avatarZone.textContent = '上傳中…';
+      try { var res = await PB.apiUpload(file); s.avatar = res.url; } catch (err) { alert('上傳失敗：' + err.message); }
+      avatarZone.textContent = '點擊上傳一張照片';
+      renderAvatarPreview();
+    });
+
+    function renderContactList() {
+      var wrap = document.getElementById('sContactList');
+      wrap.innerHTML = (s.contacts || []).map(function (c, idx) {
+        return '<div class="pb-contact-row" data-idx="' + idx + '">' +
+          '<select class="cType">' +
+            '<option value="phone"' + (c.type === 'phone' ? ' selected' : '') + '>電話</option>' +
+            '<option value="line"' + (c.type === 'line' ? ' selected' : '') + '>LINE</option>' +
+            '<option value="social"' + (c.type === 'social' ? ' selected' : '') + '>其他連結</option>' +
+          '</select>' +
+          '<input class="cLabel" type="text" placeholder="顯示文字（選填）" value="' + PB.escapeHtml(c.label || '') + '">' +
+          '<input class="cValue" type="text" placeholder="' + (c.type === 'phone' ? '電話號碼' : (c.type === 'line' ? 'LINE 連結或 ID' : '網址連結')) + '" value="' + PB.escapeHtml(c.value || '') + '">' +
+          '<button type="button" class="pb-contact-remove" data-idx="' + idx + '">×</button>' +
+        '</div>';
+      }).join('');
+      wrap.querySelectorAll('.pb-contact-row').forEach(function (row) {
+        var idx = Number(row.getAttribute('data-idx'));
+        row.querySelector('.cType').addEventListener('change', function (e) { s.contacts[idx].type = e.target.value; renderContactList(); });
+        row.querySelector('.cLabel').addEventListener('input', function (e) { s.contacts[idx].label = e.target.value; });
+        row.querySelector('.cValue').addEventListener('input', function (e) { s.contacts[idx].value = e.target.value; });
+      });
+      wrap.querySelectorAll('.pb-contact-remove').forEach(function (btn) {
+        btn.addEventListener('click', function () { s.contacts.splice(Number(btn.getAttribute('data-idx')), 1); renderContactList(); });
+      });
+    }
+    s.contacts = s.contacts || [];
+    renderContactList();
+    document.getElementById('sAddContact').addEventListener('click', function () { s.contacts.push({ type: 'phone', label: '', value: '' }); renderContactList(); });
+    document.getElementById('sCancelBtn').addEventListener('click', function () { state.mode = 'view'; state.shopDraft = null; render(); });
+    document.getElementById('sSaveBtn').addEventListener('click', async function () {
+      s.name = document.getElementById('sName').value.trim() || '我的物件簿';
+      s.role = document.getElementById('sRole').value.trim();
+      s.tagline = document.getElementById('sTagline').value.trim();
+      var btn = document.getElementById('sSaveBtn');
+      btn.textContent = '儲存中…'; btn.disabled = true;
+      try {
+        var saved = await saveShopApi(s);
+        state.shop = saved;
+        state.mode = 'view'; state.shopDraft = null;
+        render();
+      } catch (err) { btn.textContent = '儲存'; btn.disabled = false; alert('儲存失敗：' + err.message); }
+    });
+  }
+
+  document.getElementById('pbListSearch').addEventListener('input', function (e) { state.searchQuery = e.target.value; renderList(); });
+
+  async function boot() {
+    document.getElementById('pbBody').style.display = '';
+    document.getElementById('pbMain').innerHTML = '<div class="pb-loading">載入資料中…</div>';
+    try {
+      await loadShop();
+      await loadListings();
+      if (state.listings.length) state.selectedId = state.listings[0].id;
+      render();
+    } catch (err) {
+      document.getElementById('pbMain').innerHTML = '<div class="pb-err">讀取資料失敗：' + PB.escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  async function init() {
+    try {
+      var me = await PB.apiGet('/api/me');
+      if (me.authenticated) { state.authenticated = true; await boot(); }
+      else renderLogin();
+    } catch (err) {
+      renderLogin();
+    }
+  }
+  init();
+})();
+</script>
+</body>
+</html>
