@@ -7,6 +7,7 @@
 - `/`　　　　　前台物件列表（公開，任何人都看得到，看不到任何後台入口）
 - `/admin.html`　後台管理（需要密碼登入，才能新增／編輯／刪除物件）
 - `/card.html`　數位名片（公開分享用）
+  
 
 前台跟後台是**完全不同的網址**，前台頁面裡沒有任何連結、按鈕會通到後台。
 
@@ -83,6 +84,7 @@ wrangler.toml       專案設定檔（裡面有詳細的環境變數/綁定說�
 
 ```bash
 npm install -g wrangler
+
 wrangler login
 wrangler pages project create my-property-site
 wrangler pages deploy public --project-name=my-property-site
