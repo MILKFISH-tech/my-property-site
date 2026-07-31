@@ -100,8 +100,8 @@ body { font-family: 'Inter', -apple-system, sans-serif; color: var(--ink); }
 .pb-icon-btn.danger:hover { background: var(--red-light); border-color: var(--red); color: var(--red); }
 
 .pb-gallery { margin: 20px 0; }
-.pb-gallery-main { width: 100%; height: 320px; object-fit: cover; border-radius: 12px; background: #000; margin-bottom: 8px; display: block; }
-.pb-gallery-empty { width: 100%; height: 320px; border-radius: 12px; background: var(--slate-light); display: flex; align-items: center; justify-content: center; color: var(--ink-faint); font-size: 13px; margin-bottom: 8px; }
+.pb-gallery-main { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; object-position: center; border-radius: 12px; background: var(--slate-light); margin-bottom: 8px; display: block; }
+.pb-gallery-empty { width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; background: var(--slate-light); display: flex; align-items: center; justify-content: center; color: var(--ink-faint); font-size: 13px; margin-bottom: 8px; }
 .pb-gallery-strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
 .pb-thumb-btn { position: relative; width: 68px; height: 68px; border-radius: 7px; cursor: pointer; opacity: 0.6; flex-shrink: 0; border: 2px solid transparent; overflow: hidden; background: #000; }
 .pb-thumb-btn img, .pb-thumb-btn video { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -110,12 +110,12 @@ body { font-family: 'Inter', -apple-system, sans-serif; color: var(--ink); }
 .pb-thumb-play svg { width: 20px; height: 20px; fill: #fff; }
 .pb-thumb-label { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #111; color: #fff; font-size: 10px; font-weight: 600; }
 
-.pb-gallery-openlink { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 320px; border-radius: 12px; margin-bottom: 8px; background-color: #111; background-size: cover; background-position: center; text-decoration: none; }
+.pb-gallery-openlink { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9; border-radius: 12px; margin-bottom: 8px; background-color: #111; background-size: cover; background-position: center; text-decoration: none; }
 .pb-openlink-tiktok { background: linear-gradient(135deg, #111, #2a2a2a); }
 .pb-openlink-badge { position: relative; display: inline-flex; align-items: center; gap: 8px; padding: 12px 20px; background: #fff; color: var(--ink); border-radius: 999px; font-size: 14px; font-weight: 600; }
 .pb-openlink-badge svg { width: 16px; height: 16px; fill: var(--ink); }
 .pb-gallery-embed { position: relative; width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 8px; background: #000; }
-.pb-gallery-embed iframe { width: 100%; height: 320px; border: 0; display: block; }
+.pb-gallery-embed iframe { width: 100%; aspect-ratio: 16 / 9; border: 0; display: block; }
 .pb-embed-fallback-link { display: block; text-align: center; font-size: 12px; color: var(--ink-faint); margin-top: 6px; text-decoration: underline; }
 .pb-gallery-fallback { width: 100%; min-height: 200px; border-radius: 12px; background: var(--slate-light); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--ink-soft); font-size: 14px; gap: 8px; }
 
