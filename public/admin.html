@@ -109,6 +109,7 @@
     actions.innerHTML =
       '<button class="pb-add-btn" id="pbAddBtn" type="button">＋ 新增物件</button>' +
       '<button class="pb-mode-btn" id="pbShopBtn" type="button">店鋪設定</button>' +
+      '<button class="pb-mode-btn" id="pbCopyBtn" type="button">複製物件</button>' +
       '<button class="pb-mode-btn" id="pbExportBtn" type="button">匯出備份</button>' +
       '<a class="pb-mode-btn" href="/" target="_blank" style="text-decoration:none;">前台預覽</a>' +
       '<button class="pb-mode-btn" id="pbLogoutBtn" type="button">登出</button>';
@@ -121,6 +122,10 @@
     document.getElementById('pbShopBtn').addEventListener('click', function () {
       state.shopDraft = JSON.parse(JSON.stringify(state.shop));
       state.mode = 'shopSettings';
+      render();
+    });
+    document.getElementById('pbCopyBtn').addEventListener('click', function () {
+      state.mode = 'copyImport';
       render();
     });
     document.getElementById('pbExportBtn').addEventListener('click', exportBackup);
@@ -154,7 +159,9 @@
 
   function renderList() {
     var rows = filteredListings();
-    document.getElementById('pbListHead').textContent = '所有物件（' + rows.length + (state.searchQuery ? ' / 共 ' + state.listings.length : '') + '）';
+    var canDrag = !state.searchQuery;
+    document.getElementById('pbListHead').textContent = '所有物件（' + rows.length + (state.searchQuery ? ' / 共 ' + state.listings.length : '') + '）' +
+      (canDrag && rows.length > 1 ? ' · 可拖曳調整順序' : '');
     var list = document.getElementById('pbList');
     if (!state.listings.length) {
       list.innerHTML = '<div class="pb-list-empty">還沒有任何物件。<br>點右上角「新增物件」開始刊登。</div>';
@@ -167,18 +174,56 @@
     list.innerHTML = rows.map(function (l) {
       var thumb = l.images && l.images.length ? '<img class="pb-row-thumb" src="' + l.images[0] + '" alt="">' : '<div class="pb-row-thumb-empty">無照片</div>';
       var active = (l.id === state.selectedId && state.mode !== 'create' && state.mode !== 'shopSettings') ? ' active' : '';
-      return '<div class="pb-row' + active + '" data-id="' + l.id + '">' + thumb +
+      return '<div class="pb-row' + active + '" data-id="' + l.id + '" draggable="' + (canDrag ? 'true' : 'false') + '">' + thumb +
         '<div class="pb-row-info"><p class="pb-row-title">' + PB.escapeHtml(l.title || '未命名物件') + '</p>' +
         '<div class="pb-row-meta"><span class="pb-row-price">' + PB.fmtPrice(l.price) + '</span><span>·</span><span class="pb-row-addr">' + PB.escapeHtml(l.address || '未填寫地址') + '</span></div></div>' +
         '<span class="pb-row-status ' + (PB.STATUS_CLASS[l.status] || 'pb-status-sale') + '">' + (PB.STATUS_LABEL[l.status] || '售') + '</span></div>';
     }).join('');
+
+    var dragFromId = null;
     list.querySelectorAll('.pb-row').forEach(function (el) {
       el.addEventListener('click', function () {
+        if (el.classList.contains('dragging')) return;
         state.selectedId = el.getAttribute('data-id');
         state.mode = 'view';
         state.activeMedia = null;
         render();
       });
+
+      if (canDrag) {
+        el.addEventListener('dragstart', function () {
+          dragFromId = el.getAttribute('data-id');
+          el.classList.add('dragging');
+        });
+        el.addEventListener('dragend', function () {
+          el.classList.remove('dragging');
+        });
+        el.addEventListener('dragover', function (evt) {
+          evt.preventDefault();
+          el.classList.add('drag-over');
+        });
+        el.addEventListener('dragleave', function () {
+          el.classList.remove('drag-over');
+        });
+        el.addEventListener('drop', async function (evt) {
+          evt.preventDefault();
+          el.classList.remove('drag-over');
+          var toId = el.getAttribute('data-id');
+          if (!dragFromId || dragFromId === toId) return;
+          var fromIdx = state.listings.findIndex(function (x) { return x.id === dragFromId; });
+          var toIdx = state.listings.findIndex(function (x) { return x.id === toId; });
+          if (fromIdx === -1 || toIdx === -1) return;
+          var moved = state.listings.splice(fromIdx, 1)[0];
+          state.listings.splice(toIdx, 0, moved);
+          dragFromId = null;
+          renderList();
+          try {
+            await PB.apiPut('/api/reorder', { order: state.listings.map(function (x) { return x.id; }) });
+          } catch (err) {
+            alert('排序儲存失敗：' + err.message + '（重新整理後順序可能會還原）');
+          }
+        });
+      }
     });
   }
 
@@ -190,6 +235,7 @@
     renderList();
     var main = document.getElementById('pbMain');
     if (state.mode === 'shopSettings') { renderShopForm(main); return; }
+    if (state.mode === 'copyImport') { renderCopyImport(main); return; }
     if (state.mode === 'create' || state.mode === 'edit') { renderForm(main); return; }
     var l = currentListing();
     if (!l) {
@@ -242,7 +288,23 @@
         '<button class="pb-icon-btn danger" id="pbDeleteBtn" type="button">刪除</button>' +
       '</div></div>' +
       gallery +
-      (l.description ? '<p class="pb-desc">' + PB.escapeHtml(l.description).replace(/\n/g, '<br>') + '</p>' : '');
+      (l.description ? '<p class="pb-desc">' + PB.escapeHtml(l.description).replace(/\n/g, '<br>') + '</p>' : '') +
+      '<hr class="pb-divider">' +
+      '<div class="pb-hint">複製碼（給其他業務複製這筆物件當範本用）：' +
+        '<code id="pbCopyCodeText" style="user-select:all;">' + PB.escapeHtml(PB.makeCopyCode(PB.currentTenantId(), l.id)) + '</code> ' +
+        '<button type="button" class="pb-icon-btn" id="pbCopyCodeBtn" style="padding:3px 8px;font-size:11px;">複製</button>' +
+      '</div>';
+
+    var copyCodeBtn = document.getElementById('pbCopyCodeBtn');
+    if (copyCodeBtn) copyCodeBtn.addEventListener('click', function () {
+      var text = document.getElementById('pbCopyCodeText').textContent;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          copyCodeBtn.textContent = '已複製';
+          setTimeout(function () { copyCodeBtn.textContent = '複製'; }, 1500);
+        });
+      }
+    });
 
     var strip = main.querySelector('.pb-gallery-strip');
     if (strip) strip.querySelectorAll('.pb-thumb-btn').forEach(function (btn) {
@@ -414,6 +476,41 @@
         alert('儲存失敗：' + err.message);
       }
     }
+  }
+
+  // ---------- copy from another agent ----------
+  function renderCopyImport(main) {
+    main.innerHTML =
+      '<div class="pb-eyebrow">複製其他業務的物件</div>' +
+      '<div class="pb-form">' +
+        '<label>複製碼</label>' +
+        '<input type="text" id="copyCodeInput" placeholder="貼上對方提供的複製碼">' +
+        '<div class="pb-hint">請跟其他業務要他們物件詳情頁上的「複製碼」，貼在這裡查詢，查到之後可以複製一份到自己名下修改（例如同一個建案的不同戶別）。</div>' +
+        '<div class="pb-login-err" id="copyErr"></div>' +
+        '<div class="pb-form-actions">' +
+          '<button class="pb-btn-primary" id="copyLookupBtn" type="button">查詢並複製</button>' +
+          '<button class="pb-btn-secondary" id="copyCancelBtn" type="button">取消</button>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('copyCancelBtn').addEventListener('click', function () { state.mode = 'view'; render(); });
+    document.getElementById('copyLookupBtn').addEventListener('click', async function () {
+      var code = document.getElementById('copyCodeInput').value.trim();
+      var errEl = document.getElementById('copyErr');
+      errEl.textContent = '';
+      if (!code) { errEl.textContent = '請輸入複製碼'; return; }
+      var btn = document.getElementById('copyLookupBtn');
+      btn.textContent = '查詢中…'; btn.disabled = true;
+      try {
+        var source = await PB.apiGet('/api/copy?code=' + encodeURIComponent(code));
+        state.draft = Object.assign(blankDraft(), source, { id: uid(), code: '' });
+        state.mode = 'create';
+        render();
+      } catch (err) {
+        btn.textContent = '查詢並複製'; btn.disabled = false;
+        errEl.textContent = err.message || '查詢失敗';
+      }
+    });
   }
 
   // ---------- shop settings ----------
